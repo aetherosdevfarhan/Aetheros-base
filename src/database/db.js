@@ -19,6 +19,7 @@ function persist() {
 
 function defaultGuildConfig() {
   return {
+    prefix: '&',
     tempvc: {
       enabled: false,
       categoryId: null,
@@ -26,14 +27,14 @@ function defaultGuildConfig() {
       nameFormat: "{user}'s Channel",
       defaultLimit: 0,
       panelChannelId: null,
-      channels: {} // channelId -> { ownerId, createdAt, rejected: [userIds] }
+      channels: {}
     },
     antinuke: {
       enabled: false,
       logChannelId: null,
-      punishment: 'strip_ban', // strip_ban | strip_kick | strip_only
-      whitelist: [], // user IDs immune to punishment
-      trustedRoleId: null, // role that is also immune
+      punishment: 'strip_ban',
+      whitelist: [],
+      trustedRoleId: null,
       thresholds: {
         channelDelete: { count: 3, seconds: 10 },
         channelCreate: { count: 5, seconds: 10 },
@@ -42,6 +43,7 @@ function defaultGuildConfig() {
         ban: { count: 3, seconds: 10 },
         kick: { count: 3, seconds: 10 },
         webhookCreate: { count: 3, seconds: 15 },
+        mentionSpam: { count: 3, seconds: 15 },
         memberPrune: { count: 1, seconds: 10 }
       },
       allowBotAdd: false,
@@ -56,6 +58,7 @@ function getGuild(guildId) {
     persist();
   }
   const def = defaultGuildConfig();
+  cache[guildId].prefix = cache[guildId].prefix || def.prefix;
   cache[guildId].tempvc = { ...def.tempvc, ...cache[guildId].tempvc };
   cache[guildId].antinuke = {
     ...def.antinuke,
