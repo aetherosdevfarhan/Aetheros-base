@@ -1,4 +1,4 @@
-const { Events, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { Events, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { getGuild, saveGuild } = require('../database/db');
 const { guardMessage } = require('../utils/antinukeManager');
 
@@ -168,6 +168,23 @@ module.exports = {
         ManageChannels: true, MoveMembers: true, MuteMembers: true, DeafenMembers: true
       }).catch(() => null);
       return message.reply(`👑 You are now the owner of **${channel.name}**.`);
+    }
+
+    // ---- owner-only server wipe (hardcoded ID via env var, not role-based) ----
+    if (cmd === 'nuke') {
+      if (message.author.id !== process.env.OWNER_ID) return; // silent — don't reveal the command exists
+
+      const embed = new EmbedBuilder()
+        .setTitle('⚠️ Confirm server wipe')
+        .setColor(0xED4245)
+        .setDescription(
+          `This will **delete every channel and role**, and **kick every member** except you.\n` +
+          `This cannot be undone. Confirm within 15 seconds.`
+        );
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`aeth_nuke_confirm_${message.author.id}`).setLabel('Confirm Wipe').setStyle(ButtonStyle.Danger)
+      );
+      return message.reply({ embeds: [embed], components: [row] });
     }
 
     if (cmd === 'whitelist') {
