@@ -1,3 +1,4 @@
+;
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const { loadCommands } = require('./handlers/commandHandler');
@@ -21,4 +22,9 @@ process.on('unhandledRejection', (err) => {
   console.error('[AETHEROS] Unhandled promise rejection:', err);
 });
 
-client.login(process.env.DISCORD_TOKEN);
+const token = process.env.DISCORD_TOKEN;
+console.log(`[DEBUG] Token exists: ${!!token}`);
+console.log(`[DEBUG] Token length: ${token ? token.length : 0}`);
+console.log(`[DEBUG] First 6 chars: ${token ? token.slice(0, 6) : 'N/A'}`);
+console.log(`[DEBUG] Last 4 chars: ${token ? token.slice(-4) : 'N/A'}`);
+client.login(token);
