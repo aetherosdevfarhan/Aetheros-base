@@ -126,4 +126,17 @@ async function guardInstant(guild, executorId, reason) {
   await punish(guild, config, executorId, reason);
 }
 
-module.exports = { guard, guardInstant, resolveExecutor, isImmune, DANGEROUS_PERMS };
+async function guardMessage(guild, member, actionKey, reason) {
+  const config = getGuild(guild.id);
+  if (!config.antinuke.enabled) return;
+  const threshold = config.antinuke.thresholds[actionKey];
+  if (!threshold) return;
+  if (isImmune(guild, config, member)) return;
+
+  const exceeded = recordAndCheck(guild.id, member.id, actionKey, threshold);
+  if (exceeded) {
+    await punish(guild, config, member.id, reason);
+  }
+}
+
+module.exports = { guard, guardInstant, guardMessage, resolveExecutor, isImmune, DANGEROUS_PERMS };
