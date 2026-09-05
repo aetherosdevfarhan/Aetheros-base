@@ -1,6 +1,7 @@
 const { Events, EmbedBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { getGuild, saveGuild } = require('../database/db');
 const { guardMessage } = require('../utils/antinukeManager');
+const music = require('../utils/musicManager');
 
 function ownedChannelOf(message, config) {
   const channel = message.member?.voice?.channel;
@@ -27,6 +28,21 @@ module.exports = {
   name: Events.MessageCreate,
   async execute(message) {
     if (message.author.bot || !message.guild) return;
+
+    // Diagnostic: if content is empty but the message clearly isn't (no embeds/attachments/stickers),
+    // the MESSAGE CONTENT INTENT toggle is almost certainly off in the Discord Developer Portal
+    // (Bot page -> Privileged Gateway Intents). Requesting it in code (index.js) isn't enough.
+    if (
+      message.content === '' &&
+      message.embeds.length === 0 &&
+      message.attachments.size === 0 &&
+      message.stickers.size === 0
+    ) {
+      console.warn(
+        '[AETHEROS] Received a message with empty content. If this keeps happening for normal text messages, ' +
+        'enable "MESSAGE CONTENT INTENT" for this bot at https://discord.com/developers/applications -> your app -> Bot -> Privileged Gateway Intents.'
+      );
+    }
 
     const config = getGuild(message.guild.id);
 
@@ -78,13 +94,18 @@ module.exports = {
           `\`${prefix}lock\` / \`${prefix}unlock\` — lock or unlock your channel\n` +
           `\`${prefix}hide\` / \`${prefix}unhide\` — hide or reveal your channel\n` +
           `\`${prefix}limit <n>\` — set user limit (0 = unlimited)\n` +
-          `\`${prefix}rename <name>\` — rename your channel\n` +
+          `\`${prefix}rename <n>\` — rename your channel\n` +
           `\`${prefix}claim\` — claim ownership if the owner left\n` +
           `\`${prefix}info\` — show info about your current voice channel\n\n` +
           `**Anti-Nuke** (admin only)\n` +
           `\`${prefix}whitelist add @user\`\n` +
           `\`${prefix}whitelist remove @user\`\n` +
           `\`${prefix}whitelist list\`\n\n` +
+          `**Music**\n` +
+          `\`${prefix}play <song or URL>\` — play or queue a song\n` +
+          `\`${prefix}skip\` · \`${prefix}stop\` · \`${prefix}pause\` · \`${prefix}resume\`\n` +
+          `\`${prefix}queue\` · \`${prefix}nowplaying\`\n` +
+          `\`${prefix}volume <0-200>\` · \`${prefix}loop <off|track|queue>\`\n\n` +
           `**General**\n` +
           `\`${prefix}ping\` · \`${prefix}stats\` · \`${prefix}uptime\`\n\n` +
           `**Config** (admin only)\n` +
@@ -172,7 +193,11 @@ module.exports = {
 
     // ---- owner-only server wipe (hardcoded ID via env var, not role-based) ----
     if (cmd === 'nuke') {
-      if (message.author.id !== process.env.OWNER_ID) return; // silent — don't reveal the command exists
+      const ownerId = process.env.OWNER_ID?.trim();
+      if (!ownerId) {
+        return message.reply('⚠️ `OWNER_ID` is not set in the bot\'s `.env` file, so this command is disabled. Set it and restart the bot.');
+      }
+      if (message.author.id !== ownerId) return; // silent — don't reveal the command exists
 
       const embed = new EmbedBuilder()
         .setTitle('⚠️ Confirm server wipe')
@@ -220,6 +245,130 @@ module.exports = {
         return;
       }
       return message.reply('Usage: `&whitelist add|remove|list [@user]`');
+    }
+
+    // ---- Music ----
+    if (cmd === 'play') {
+      const query = args.join(' ');
+      if (!query) return message.reply(`❌ Give me a song name or URL: \`${prefix}play never gonna give you up\``);
+      const loadingMsg = await message.reply('🔎 Searching...');
+      try {
+        const result = await music.addToQueue({
+          guild: message.guild,
+          member: message.member,
+          textChannel: message.channel,
+          query
+        });
+        const embed = new EmbedBuilder().setColor(0x5865F2);
+        if (result.startedPlaying) {
+          embed.setTitle('🎶 Now playing').setDescription(`**${result.track.title}**`)
+            .setThumbnail(result.track.thumbnail || null)
+            .addFields({ name: 'Duration', value: music.formatDuration(result.track.durationSeconds), inline: true });
+        } else {
+          embed.setTitle('➕ Added to queue').setDescription(`**${result.track.title}**`)
+            .setThumbnail(result.track.thumbnail || null)
+            .addFields(
+              { name: 'Duration', value: music.formatDuration(result.track.durationSeconds), inline: true },
+              { name: 'Position', value: `${result.position}`, inline: true }
+            );
+        }
+        return loadingMsg.edit({ content: null, embeds: [embed] });
+      } catch (err) {
+        return loadingMsg.edit(`❌ ${err.message}`);
+      }
+    }
+
+    if (cmd === 'skip') {
+      try {
+        const skipped = music.skip(message.guild.id);
+        return message.reply(`⏭️ Skipped **${skipped.title}**.`);
+      } catch (err) {
+        return message.reply(`❌ ${err.message}`);
+      }
+    }
+
+    if (cmd === 'stop') {
+      try {
+        music.stop(message.guild.id);
+        return message.reply('⏹️ Stopped playback and cleared the queue.');
+      } catch (err) {
+        return message.reply(`❌ ${err.message}`);
+      }
+    }
+
+    if (cmd === 'pause') {
+      try {
+        music.pause(message.guild.id);
+        return message.reply('⏸️ Paused.');
+      } catch (err) {
+        return message.reply(`❌ ${err.message}`);
+      }
+    }
+
+    if (cmd === 'resume') {
+      try {
+        music.resume(message.guild.id);
+        return message.reply('▶️ Resumed.');
+      } catch (err) {
+        return message.reply(`❌ ${err.message}`);
+      }
+    }
+
+    if (cmd === 'volume') {
+      const percent = Math.max(0, Math.min(200, parseInt(args[0], 10)));
+      if (Number.isNaN(percent)) return message.reply(`❌ Give me a number 0-200: \`${prefix}volume 100\``);
+      try {
+        music.setVolume(message.guild.id, percent);
+        return message.reply(`🔊 Volume set to ${percent}%.`);
+      } catch (err) {
+        return message.reply(`❌ ${err.message}`);
+      }
+    }
+
+    if (cmd === 'loop') {
+      const mode = args[0]?.toLowerCase();
+      if (!['off', 'track', 'queue'].includes(mode)) {
+        return message.reply(`❌ Usage: \`${prefix}loop off|track|queue\``);
+      }
+      try {
+        music.setLoop(message.guild.id, mode);
+        return message.reply(`🔁 Loop mode set to **${mode}**.`);
+      } catch (err) {
+        return message.reply(`❌ ${err.message}`);
+      }
+    }
+
+    if (cmd === 'nowplaying' || cmd === 'np') {
+      const queue = music.getQueue(message.guild.id);
+      if (!queue?.nowPlaying) return message.reply('Nothing is playing right now.');
+      const embed = new EmbedBuilder()
+        .setTitle('🎶 Now playing')
+        .setDescription(`**${queue.nowPlaying.title}**`)
+        .setThumbnail(queue.nowPlaying.thumbnail || null)
+        .setColor(0x5865F2)
+        .addFields(
+          { name: 'Duration', value: music.formatDuration(queue.nowPlaying.durationSeconds), inline: true },
+          { name: 'Requested by', value: `<@${queue.nowPlaying.requestedBy}>`, inline: true },
+          { name: 'Loop', value: queue.loop, inline: true }
+        );
+      return message.reply({ embeds: [embed] });
+    }
+
+    if (cmd === 'queue') {
+      const queue = music.getQueue(message.guild.id);
+      if (!queue || (!queue.nowPlaying && queue.songs.length === 0)) {
+        return message.reply('The queue is empty.');
+      }
+      const lines = queue.songs.slice(0, 10).map((s, i) => `**${i + 1}.** ${s.title} — ${music.formatDuration(s.durationSeconds)}`);
+      const embed = new EmbedBuilder()
+        .setTitle('📜 Queue')
+        .setColor(0x5865F2)
+        .setDescription(
+          `**Now playing:** ${queue.nowPlaying ? queue.nowPlaying.title : 'Nothing'}\n\n` +
+          (lines.length ? lines.join('\n') : '_Queue is empty._') +
+          (queue.songs.length > 10 ? `\n...and ${queue.songs.length - 10} more` : '')
+        );
+      return message.reply({ embeds: [embed] });
     }
   }
 };
