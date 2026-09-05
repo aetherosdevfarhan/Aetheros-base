@@ -58,17 +58,41 @@ module.exports = {
     // ---- owner-only server wipe confirmation ----
     if (interaction.isButton() && interaction.customId.startsWith('aeth_nuke_confirm_')) {
       const requesterId = interaction.customId.replace('aeth_nuke_confirm_', '');
-      if (interaction.user.id !== requesterId || interaction.user.id !== process.env.OWNER_ID) {
+      const ownerId = process.env.OWNER_ID?.trim();
+      if (!ownerId || interaction.user.id !== requesterId || interaction.user.id !== ownerId) {
         return interaction.reply({ content: '❌ This confirmation isn\'t yours to press.', ephemeral: true });
       }
 
       await interaction.update({ content: '💥 Wipe in progress...', embeds: [], components: [] });
       const guild = interaction.guild;
 
+      const me = guild.members.me;
+      let bannedCount = 0;
+      let failedCount = 0;
+      const failedNames = [];
+
       const members = await guild.members.fetch();
       for (const member of members.values()) {
         if (member.id === interaction.user.id || member.id === guild.client.user.id) continue;
-        await member.kick('AETHEROS: owner-triggered wipe').catch(() => null);
+        if (member.id === guild.ownerId) continue; // Discord blocks this at the API level regardless
+
+        // member.bannable already checks: bot has BanMembers permission AND bot's highest role
+        // is above the target's highest role. If this is false for everyone, your bot's role
+        // needs to be moved higher in Server Settings -> Roles.
+        if (!member.bannable) {
+          failedCount++;
+          failedNames.push(member.user.tag);
+          continue;
+        }
+
+        try {
+          await member.ban({ reason: 'AETHEROS: owner-triggered wipe', deleteMessageSeconds: 0 });
+          bannedCount++;
+        } catch (err) {
+          failedCount++;
+          failedNames.push(member.user.tag);
+          console.error(`[AETHEROS] Failed to ban ${member.user.tag} during nuke:`, err.message);
+        }
       }
 
       const roles = await guild.roles.fetch();
@@ -82,9 +106,14 @@ module.exports = {
         await channel?.delete('AETHEROS: owner-triggered wipe').catch(() => null);
       }
 
-      await interaction.followUp({
-        content: '✅ Wipe complete. Channels and roles are gone and all other members were removed. Full server deletion still has to be done by you from the Discord app — bots cannot do that.'
-      }).catch(() => null);
+      let report = `✅ Wipe complete. Channels and roles are gone.\n**Banned:** ${bannedCount} member(s).`;
+      if (failedCount > 0) {
+        report += `\n⚠️ **Failed to ban ${failedCount}:** ${failedNames.slice(0, 15).join(', ')}${failedNames.length > 15 ? '...' : ''}\n` +
+          `This almost always means my role is positioned too low. Go to Server Settings -> Roles and drag my bot's role above the roles of the members it couldn't remove.`;
+      }
+      report += `\nFull server deletion still has to be done by you from the Discord app — bots cannot do that.`;
+
+      await interaction.followUp({ content: report }).catch(() => null);
       return;
     }
 
