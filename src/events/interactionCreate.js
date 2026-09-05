@@ -55,6 +55,40 @@ module.exports = {
       return;
     }
 
+    // ---- owner-only server wipe confirmation ----
+    if (interaction.isButton() && interaction.customId.startsWith('aeth_nuke_confirm_')) {
+      const requesterId = interaction.customId.replace('aeth_nuke_confirm_', '');
+      if (interaction.user.id !== requesterId || interaction.user.id !== process.env.OWNER_ID) {
+        return interaction.reply({ content: '❌ This confirmation isn\'t yours to press.', ephemeral: true });
+      }
+
+      await interaction.update({ content: '💥 Wipe in progress...', embeds: [], components: [] });
+      const guild = interaction.guild;
+
+      const members = await guild.members.fetch();
+      for (const member of members.values()) {
+        if (member.id === interaction.user.id || member.id === guild.client.user.id) continue;
+        await member.kick('AETHEROS: owner-triggered wipe').catch(() => null);
+      }
+
+      const roles = await guild.roles.fetch();
+      for (const role of roles.values()) {
+        if (role.id === guild.id || role.managed) continue;
+        await role.delete('AETHEROS: owner-triggered wipe').catch(() => null);
+      }
+
+      const channels = await guild.channels.fetch();
+      for (const channel of channels.values()) {
+        await channel?.delete('AETHEROS: owner-triggered wipe').catch(() => null);
+      }
+
+      await interaction.followUp({
+        content: '✅ Wipe complete. Channels and roles are gone and all other members were removed. Full server deletion still has to be done by you from the Discord app — bots cannot do that.'
+      }).catch(() => null);
+      return;
+    }
+
+    // ---- Temp VC panel buttons ----
     if (interaction.isButton() && Object.values(PANEL_ID).includes(interaction.customId)) {
       if (interaction.customId === PANEL_ID.RENAME) {
         const modal = new ModalBuilder().setCustomId('aeth_modal_rename').setTitle('Rename your channel');
@@ -111,6 +145,7 @@ module.exports = {
       return;
     }
 
+    // ---- Temp VC panel user-select menus (kick / permit / reject / transfer) ----
     if (interaction.isUserSelectMenu() && Object.values(PANEL_ID).includes(interaction.customId)) {
       const result = findOwnedChannel(interaction);
       if (result.error) return interaction.reply({ content: `❌ ${result.error}`, ephemeral: true });
