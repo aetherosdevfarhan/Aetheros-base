@@ -31,3 +31,233 @@ function formatDuration(seconds) {
   if (!seconds || Number.isNaN(seconds)) return 'Live';
   const s = Math.floor(seconds);
   const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+}
+
+function clearTimers(queue) {
+  if (queue.idleTimer) clearTimeout(queue.idleTimer);
+  if (queue.emptyTimer) clearTimeout(queue.emptyTimer);
+  queue.idleTimer = null;
+  queue.emptyTimer = null;
+}
+
+function destroyQueue(guildId) {
+  const queue = queues.get(guildId);
+  if (!queue) return;
+  clearTimers(queue);
+  try { queue.player.stop(true); } catch { /* ignore */ }
+  try { queue.connection.destroy(); } catch { /* ignore */ }
+  queues.delete(guildId);
+}
+
+async function resolveTrack(query, requestedBy) {
+  const isUrl = playdl.yt_validate(query) === 'video';
+
+  if (isUrl) {
+    const info = await playdl.video_basic_info(query);
+    const details = info.video_details;
+    return {
+      title: details.title,
+      url: details.url,
+      durationSeconds: details.durationInSec,
+      thumbnail: details.thumbnails?.[details.thumbnails.length - 1]?.url,
+      requestedBy
+    };
+  }
+
+  const results = await playdl.search(query, { source: { youtube: 'video' }, limit: 1 });
+  if (!results.length) return null;
+  const video = results[0];
+  return {
+    title: video.title,
+    url: video.url,
+    durationSeconds: video.durationInSec,
+    thumbnail: video.thumbnails?.[video.thumbnails.length - 1]?.url,
+    requestedBy
+  };
+}
+
+async function playNext(guildId) {
+  const queue = queues.get(guildId);
+  if (!queue) return;
+
+  const next = queue.songs.shift();
+  if (!next) {
+    // Nothing left to play — start the idle-leave timer instead of disconnecting instantly,
+    // in case the user queues something else right away.
+    queue.nowPlaying = null;
+    clearTimers(queue);
+    queue.idleTimer = setTimeout(() => destroyQueue(guildId), IDLE_TIMEOUT_MS);
+    return;
+  }
+
+  clearTimers(queue);
+  queue.nowPlaying = next;
+
+  try {
+    const stream = await playdl.stream(next.url);
+    const resource = createAudioResource(stream.stream, {
+      inputType: stream.type || StreamType.Arbitrary,
+      inlineVolume: true
+    });
+    resource.volume?.setVolume((queue.volume ?? 100) / 100);
+    queue.player.play(resource);
+  } catch (err) {
+    console.error('[AETHEROS] [music] Failed to stream track:', err);
+    queue.textChannel?.send(`⚠️ Couldn't play **${next.title}**, skipping.`).catch(() => null);
+    return playNext(guildId);
+  }
+}
+
+async function getOrCreateQueue(guild, voiceChannel, textChannel) {
+  let queue = queues.get(guild.id);
+  if (queue) return queue;
+
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: guild.id,
+    adapterCreator: guild.voiceAdapterCreator,
+    selfDeaf: true
+  });
+
+  const player = createAudioPlayer();
+  connection.subscribe(player);
+
+  queue = {
+    guildId: guild.id,
+    voiceChannelId: voiceChannel.id,
+    textChannel,
+    connection,
+    player,
+    songs: [],
+    nowPlaying: null,
+    loop: 'off', // 'off' | 'track' | 'queue'
+    volume: 100,
+    idleTimer: null,
+    emptyTimer: null
+  };
+  queues.set(guild.id, queue);
+
+  player.on(AudioPlayerStatus.Idle, () => {
+    const q = queues.get(guild.id);
+    if (!q) return;
+    if (q.loop === 'track' && q.nowPlaying) {
+      q.songs.unshift(q.nowPlaying);
+    } else if (q.loop === 'queue' && q.nowPlaying) {
+      q.songs.push(q.nowPlaying);
+    }
+    playNext(guild.id);
+  });
+
+  player.on('error', (err) => {
+    console.error('[AETHEROS] [music] Player error:', err);
+    const q = queues.get(guild.id);
+    q?.textChannel?.send(`⚠️ Playback error on **${q?.nowPlaying?.title ?? 'current track'}**, skipping.`).catch(() => null);
+    playNext(guild.id);
+  });
+
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+  } catch {
+    connection.destroy();
+    queues.delete(guild.id);
+    throw new Error("Couldn't connect to the voice channel in time.");
+  }
+
+  connection.on(VoiceConnectionStatus.Disconnected, async () => {
+    try {
+      await Promise.race([
+        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+        entersState(connection, VoiceConnectionStatus.Connecting, 5_000)
+      ]);
+    } catch {
+      destroyQueue(guild.id);
+    }
+  });
+
+  return queue;
+}
+
+async function addToQueue({ guild, member, textChannel, query }) {
+  const voiceChannel = member.voice?.channel;
+  if (!voiceChannel) throw new Error('Join a voice channel first.');
+  if (!voiceChannel.joinable) throw new Error("I don't have permission to join that voice channel.");
+  if (!voiceChannel.permissionsFor(guild.members.me)?.has(['Connect', 'Speak'])) {
+    throw new Error("I need **Connect** and **Speak** permissions in your voice channel.");
+  }
+
+  const existing = queues.get(guild.id);
+  if (existing && existing.voiceChannelId !== voiceChannel.id) {
+    throw new Error(`I'm already playing music in <#${existing.voiceChannelId}>.`);
+  }
+
+  const track = await resolveTrack(query, member.id);
+  if (!track) throw new Error("Couldn't find anything for that search.");
+
+  const queue = await getOrCreateQueue(guild, voiceChannel, textChannel);
+  clearTimers(queue);
+  queue.songs.push(track);
+
+  if (!queue.nowPlaying) {
+    await playNext(guild.id);
+    return { track, startedPlaying: true };
+  }
+  return { track, startedPlaying: false, position: queue.songs.length };
+}
+
+function skip(guildId) {
+  const queue = queues.get(guildId);
+  if (!queue || !queue.nowPlaying) throw new Error('Nothing is playing right now.');
+  const skipped = queue.nowPlaying;
+  queue.player.stop(true); // triggers Idle -> playNext
+  return skipped;
+}
+
+function stop(guildId) {
+  const queue = queues.get(guildId);
+  if (!queue) throw new Error("I'm not playing anything right now.");
+  destroyQueue(guildId);
+}
+
+function pause(guildId) {
+  const queue = queues.get(guildId);
+  if (!queue?.nowPlaying) throw new Error('Nothing is playing right now.');
+  if (!queue.player.pause()) throw new Error('Already paused.');
+}
+
+function resume(guildId) {
+  const queue = queues.get(guildId);
+  if (!queue?.nowPlaying) throw new Error('Nothing is playing right now.');
+  if (!queue.player.unpause()) throw new Error('Already playing.');
+}
+
+function setVolume(guildId, volume) {
+  const queue = queues.get(guildId);
+  if (!queue) throw new Error("I'm not playing anything right now.");
+  queue.volume = volume;
+  const resource = queue.player.state.resource;
+  resource?.volume?.setVolume(volume / 100);
+}
+
+function setLoop(guildId, mode) {
+  const queue = queues.get(guildId);
+  if (!queue) throw new Error("I'm not playing anything right now.");
+  queue.loop = mode;
+}
+
+module.exports = {
+  getQueue,
+  addToQueue,
+  skip,
+  stop,
+  pause,
+  resume,
+  setVolume,
+  setLoop,
+  formatDuration,
+  destroyQueue,
+  EMPTY_CHANNEL_TIMEOUT_MS
+};
