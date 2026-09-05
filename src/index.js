@@ -28,3 +28,8 @@ console.log(`[DEBUG] Token length: ${token ? token.length : 0}`);
 console.log(`[DEBUG] First 6 chars: ${token ? token.slice(0, 6) : 'N/A'}`);
 console.log(`[DEBUG] Last 4 chars: ${token ? token.slice(-4) : 'N/A'}`);
 client.login(token);
+const http = require('node:http');
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => res.end('AETHEROS is running')).listen(PORT, () => {
+  console.log(`[AETHEROS] Dummy web server listening on port ${PORT} (for host health checks)`);
+});
