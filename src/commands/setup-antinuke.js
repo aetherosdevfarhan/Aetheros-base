@@ -75,21 +75,76 @@ module.exports = {
     if (group === 'whitelist') {
       if (sub === 'add') {
         const user = interaction.options.getUser('user');
-        if (!config.antinuke.whitelist.includes(user.id)) config.antinuke.whitelist.push(user.id);
+
+        if (user.id === interaction.guild.ownerId) {
+          return interaction.reply({
+            content: `ℹ️ ${user} is the server owner and is already always immune — no need to whitelist them.`,
+            ephemeral: true
+          });
+        }
+        if (config.antinuke.whitelist.includes(user.id)) {
+          return interaction.reply({ content: `⚠️ ${user} is already whitelisted.`, ephemeral: true });
+        }
+
+        config.antinuke.whitelist.push(user.id);
         saveGuild(interaction.guild.id, config);
-        return interaction.reply({ content: `✅ ${user} added to the anti-nuke whitelist.` });
+
+        const embed = new EmbedBuilder()
+          .setColor(0x57F287)
+          .setDescription(`✅ ${user} added to the anti-nuke whitelist.`)
+          .setFooter({ text: `${config.antinuke.whitelist.length} user(s) whitelisted` });
+        return interaction.reply({ embeds: [embed] });
       }
+
       if (sub === 'remove') {
         const user = interaction.options.getUser('user');
+        if (!config.antinuke.whitelist.includes(user.id)) {
+          return interaction.reply({ content: `⚠️ ${user} isn't on the whitelist.`, ephemeral: true });
+        }
+
         config.antinuke.whitelist = config.antinuke.whitelist.filter(id => id !== user.id);
         saveGuild(interaction.guild.id, config);
-        return interaction.reply({ content: `🗑️ ${user} removed from the anti-nuke whitelist.` });
+
+        const embed = new EmbedBuilder()
+          .setColor(0xED4245)
+          .setDescription(`🗑️ ${user} removed from the anti-nuke whitelist.`)
+          .setFooter({ text: `${config.antinuke.whitelist.length} user(s) whitelisted` });
+        return interaction.reply({ embeds: [embed] });
       }
+
       if (sub === 'list') {
-        const list = config.antinuke.whitelist.length
-          ? config.antinuke.whitelist.map(id => `<@${id}>`).join('\n')
-          : 'No one whitelisted yet.';
-        return interaction.reply({ content: list, ephemeral: true });
+        const ids = config.antinuke.whitelist;
+
+        if (!ids.length) {
+          return interaction.reply({
+            embeds: [new EmbedBuilder().setColor(0x5865F2).setTitle('🛡️ Anti-Nuke Whitelist').setDescription('No one whitelisted yet.')],
+            ephemeral: true
+          });
+        }
+
+        const CHUNK = 25;
+        const fields = [];
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          const chunk = ids.slice(i, i + CHUNK);
+          fields.push({
+            name: `Members ${i + 1}–${i + chunk.length}`,
+            value: chunk.map(id => `<@${id}>`).join('\n'),
+            inline: true
+          });
+        }
+
+        const embeds = [];
+        for (let i = 0; i < fields.length; i += 25) {
+          const batch = fields.slice(i, i + 25);
+          embeds.push(
+            new EmbedBuilder()
+              .setColor(0x5865F2)
+              .setTitle(i === 0 ? `🛡️ Anti-Nuke Whitelist (${ids.length})` : '🛡️ Anti-Nuke Whitelist (cont.)')
+              .addFields(batch)
+          );
+        }
+
+        return interaction.reply({ embeds, ephemeral: true });
       }
     }
 
