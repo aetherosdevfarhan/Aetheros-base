@@ -17,6 +17,31 @@ try {
   // ffmpeg-static not installed — playback will fail with a clear error from @discordjs/voice.
 }
 
+// Optional: a logged-in YouTube cookie makes play-dl noticeably more reliable on cloud hosts
+// (Render/Railway/etc. IPs get rate-limited/blocked by YouTube more aggressively than home IPs).
+// This does NOT make it bulletproof — YouTube can still block cloud IPs outright — but it helps.
+// Set YOUTUBE_COOKIE in your host's environment variables to enable it. Leave unset to skip.
+if (process.env.YOUTUBE_COOKIE) {
+  playdl.setToken({ youtube: { cookie: process.env.YOUTUBE_COOKIE } })
+    .then(() => console.log('[AETHEROS] [music] YouTube cookie loaded.'))
+    .catch(err => console.warn('[AETHEROS] [music] Failed to apply YouTube cookie:', err.message));
+}
+
+function friendlyStreamError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  if (msg.includes('sign in') || msg.includes('confirm') || msg.includes('bot')) {
+    return "YouTube is blocking this server's streaming requests (common on cloud hosts like Render). " +
+      "Try setting a YOUTUBE_COOKIE environment variable, or try a different search/URL.";
+  }
+  if (msg.includes('private') || msg.includes('unavailable')) {
+    return 'That video is private or unavailable.';
+  }
+  if (msg.includes('age')) {
+    return 'That video is age-restricted and needs a signed-in cookie to play — set YOUTUBE_COOKIE.';
+  }
+  return err.message || 'Unknown playback error.';
+}
+
 // guildId -> queue
 const queues = new Map();
 
@@ -56,28 +81,32 @@ function destroyQueue(guildId) {
 async function resolveTrack(query, requestedBy) {
   const isUrl = playdl.yt_validate(query) === 'video';
 
-  if (isUrl) {
-    const info = await playdl.video_basic_info(query);
-    const details = info.video_details;
+  try {
+    if (isUrl) {
+      const info = await playdl.video_basic_info(query);
+      const details = info.video_details;
+      return {
+        title: details.title,
+        url: details.url,
+        durationSeconds: details.durationInSec,
+        thumbnail: details.thumbnails?.[details.thumbnails.length - 1]?.url,
+        requestedBy
+      };
+    }
+
+    const results = await playdl.search(query, { source: { youtube: 'video' }, limit: 1 });
+    if (!results.length) return null;
+    const video = results[0];
     return {
-      title: details.title,
-      url: details.url,
-      durationSeconds: details.durationInSec,
-      thumbnail: details.thumbnails?.[details.thumbnails.length - 1]?.url,
+      title: video.title,
+      url: video.url,
+      durationSeconds: video.durationInSec,
+      thumbnail: video.thumbnails?.[video.thumbnails.length - 1]?.url,
       requestedBy
     };
+  } catch (err) {
+    throw new Error(friendlyStreamError(err));
   }
-
-  const results = await playdl.search(query, { source: { youtube: 'video' }, limit: 1 });
-  if (!results.length) return null;
-  const video = results[0];
-  return {
-    title: video.title,
-    url: video.url,
-    durationSeconds: video.durationInSec,
-    thumbnail: video.thumbnails?.[video.thumbnails.length - 1]?.url,
-    requestedBy
-  };
 }
 
 async function playNext(guildId) {
@@ -107,7 +136,7 @@ async function playNext(guildId) {
     queue.player.play(resource);
   } catch (err) {
     console.error('[AETHEROS] [music] Failed to stream track:', err);
-    queue.textChannel?.send(`⚠️ Couldn't play **${next.title}**, skipping.`).catch(() => null);
+    queue.textChannel?.send(`⚠️ Couldn't play **${next.title}** — ${friendlyStreamError(err)}. Skipping.`).catch(() => null);
     return playNext(guildId);
   }
 }
