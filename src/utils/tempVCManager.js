@@ -130,6 +130,7 @@ async function handleAutoDelete(guild, channel) {
   const tvc = config.tempvc;
   const record = tvc.channels[channel.id];
   if (!record) return;
+  if (record.persistent) return; // 24/7 channel — never auto-deletes
   if (channel.members.size > 0) return;
 
   try {
