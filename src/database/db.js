@@ -20,6 +20,7 @@ function persist() {
 function defaultGuildConfig() {
   return {
     prefix: '&',
+    panic: { active: false, channelIds: [] },
     tempvc: {
       enabled: false,
       categoryId: null,
@@ -59,6 +60,7 @@ function getGuild(guildId) {
   }
   const def = defaultGuildConfig();
   cache[guildId].prefix = cache[guildId].prefix || def.prefix;
+  cache[guildId].panic = cache[guildId].panic || def.panic;
   cache[guildId].tempvc = { ...def.tempvc, ...cache[guildId].tempvc };
   cache[guildId].antinuke = {
     ...def.antinuke,
