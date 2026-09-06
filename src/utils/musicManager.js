@@ -115,8 +115,6 @@ async function playNext(guildId) {
 
   const next = queue.songs.shift();
   if (!next) {
-    // Nothing left to play — start the idle-leave timer instead of disconnecting instantly,
-    // in case the user queues something else right away.
     queue.nowPlaying = null;
     clearTimers(queue);
     queue.idleTimer = setTimeout(() => destroyQueue(guildId), IDLE_TIMEOUT_MS);
@@ -163,7 +161,7 @@ async function getOrCreateQueue(guild, voiceChannel, textChannel) {
     player,
     songs: [],
     nowPlaying: null,
-    loop: 'off', // 'off' | 'track' | 'queue'
+    loop: 'off',
     volume: 100,
     idleTimer: null,
     emptyTimer: null
@@ -188,12 +186,21 @@ async function getOrCreateQueue(guild, voiceChannel, textChannel) {
     playNext(guild.id);
   });
 
+  connection.on('stateChange', (oldState, newState) => {
+    console.log(`[AETHEROS] [music] Voice connection: ${oldState.status} -> ${newState.status}`);
+  });
+
   try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
   } catch {
     connection.destroy();
     queues.delete(guild.id);
-    throw new Error("Couldn't connect to the voice channel in time.");
+    throw new Error(
+      "Couldn't establish a stable voice connection in time. This is almost always the hosting " +
+      "platform blocking the UDP traffic Discord voice needs (common on Render/Heroku free tiers), " +
+      "not a bug in the bot. Check the deploy logs for the [music] Voice connection state lines " +
+      "printed just before this to see exactly where it got stuck."
+    );
   }
 
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
@@ -241,7 +248,7 @@ function skip(guildId) {
   const queue = queues.get(guildId);
   if (!queue || !queue.nowPlaying) throw new Error('Nothing is playing right now.');
   const skipped = queue.nowPlaying;
-  queue.player.stop(true); // triggers Idle -> playNext
+  queue.player.stop(true);
   return skipped;
 }
 
